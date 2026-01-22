@@ -1,4 +1,4 @@
-"""Объединенный обработчик Telegram бота v2 - с профилями и улучшенной регистрацией."""
+"""Объединенный обработчик Telegram бота v2 - ИСПРАВЛЕНО."""
 
 import threading
 import time
@@ -31,7 +31,7 @@ class TelegramUnifiedHandler:
         chat_id: str,
         thread_id: Optional[int],
         on_replace_triggered: Optional[Callable] = None,
-        proxy_manager=None,  # Оставляем для обратной совместимости
+        proxy_manager=None,
         boost_url: Optional[str] = None,
         session=None
     ):
@@ -46,13 +46,10 @@ class TelegramUnifiedHandler:
         self.users_db = get_users_db()
         self.bot_message_ids = set()
         
-        # 🔧 ИСПРАВЛЕНО: НЕ используем прокси для парсера Google Sheets
         self.sheets_parser = get_sheets_parser(None)
+        self.user_states = {}
         
-        # 🔧 НОВОЕ: Временные состояния пользователей
-        self.user_states = {}  # {chat_id: {'state': 'waiting_add', 'url': '...'}}
-        
-        # Валидатор клуба (использует session с прокси для MangaBuff)
+        # Валидатор клуба
         self.validator = None
         if boost_url and session:
             self.validator = create_club_validator(
@@ -60,14 +57,13 @@ class TelegramUnifiedHandler:
                 bot_token=bot_token,
                 boost_url=boost_url,
                 telegram_chat_id=chat_id,
-                proxy_manager=proxy_manager  # Прокси только для MangaBuff
+                proxy_manager=proxy_manager
             )
             if self.validator:
                 logger.info("✅ Валидатор клуба инициализирован")
         
-        # 🔧 ИСПРАВЛЕНО: НЕ используем прокси для Telegram API
         self.proxies = None
-        logger.info("Telegram unified handler работает БЕЗ прокси (прямое подключение)")
+        logger.info("Telegram unified handler работает БЕЗ прокси")
         
         self._test_connection()
     
@@ -75,7 +71,6 @@ class TelegramUnifiedHandler:
         """Тестирует подключение."""
         try:
             url = f"{self.api_url}/getMe"
-            # 🔧 БЕЗ прокси
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
@@ -116,7 +111,6 @@ class TelegramUnifiedHandler:
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
             
-            # 🔧 БЕЗ прокси
             response = requests.post(url, json=data, timeout=10)
             
             if response.status_code == 200:
@@ -144,7 +138,6 @@ class TelegramUnifiedHandler:
                 "show_alert": show_alert
             }
             
-            # 🔧 БЕЗ прокси
             response = requests.post(url, json=data, timeout=10)
             return response.status_code == 200
         except Exception as e:
@@ -172,7 +165,6 @@ class TelegramUnifiedHandler:
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
             
-            # 🔧 БЕЗ прокси
             response = requests.post(url, json=data, timeout=10)
             return response.status_code == 200
         except Exception as e:
@@ -188,7 +180,7 @@ class TelegramUnifiedHandler:
         return any(keyword in text_lower for keyword in self.TRIGGER_KEYWORDS)
     
     def show_notifications_list(self, chat_id: int) -> None:
-        """🔧 ПЕРЕИМЕНОВАНО: /list → /notifications."""
+        """Показывает список уведомлений."""
         accounts = self.users_db.get_user_accounts(chat_id)
         
         if not accounts:
@@ -224,7 +216,7 @@ class TelegramUnifiedHandler:
         logger.info(f"Показан список из {len(accounts)} аккаунтов для {chat_id}")
     
     def show_profile_list(self, chat_id: int) -> None:
-        """🔧 НОВОЕ: Показывает список аккаунтов для просмотра профиля."""
+        """Показывает список аккаунтов для просмотра профиля."""
         accounts = self.users_db.get_user_accounts(chat_id)
         
         if not accounts:
@@ -254,7 +246,7 @@ class TelegramUnifiedHandler:
         logger.info(f"Показан список профилей для {chat_id}")
     
     def show_profile(self, chat_id: int, callback_query_id: str, user_id: str) -> None:
-        """🔧 НОВОЕ: Показывает профиль из Google Sheets."""
+        """🔧 ИСПРАВЛЕНО: Показывает профиль из Google Sheets."""
         logger.info(f"📊 Загрузка профиля {user_id} для {chat_id}")
         
         # Загружаем профиль из таблицы
@@ -291,11 +283,6 @@ class TelegramUnifiedHandler:
                 break
         
         if not account:
-            self.answer_callback_query(
-                message_id,
-                "❌ Аккаунт не найден",
-                show_alert=True
-            )
             return
         
         username = account['username']
@@ -370,7 +357,7 @@ class TelegramUnifiedHandler:
             logger.error(f"❌ Не удалось изменить тип: {message}")
     
     def ask_link_action(self, chat_id: int, url: str) -> None:
-        """🔧 НОВОЕ: Спрашивает что делать с ссылкой."""
+        """Спрашивает что делать с ссылкой."""
         keyboard = {
             "inline_keyboard": [
                 [
@@ -403,7 +390,7 @@ class TelegramUnifiedHandler:
         callback_query_id: str,
         url: str
     ) -> None:
-        """🔧 НОВОЕ: Обрабатывает привязку через кнопку."""
+        """Обрабатывает привязку через кнопку."""
         self.answer_callback_query(callback_query_id)
         
         # Валидация
@@ -455,7 +442,7 @@ class TelegramUnifiedHandler:
         callback_query_id: str,
         url: str
     ) -> None:
-        """🔧 НОВОЕ: Показывает профиль по ссылке."""
+        """Показывает профиль по ссылке."""
         self.answer_callback_query(callback_query_id)
         
         user_id = self.users_db.extract_id_from_url(url)
@@ -495,7 +482,7 @@ class TelegramUnifiedHandler:
         # Обновляем telegram username
         self.users_db.update_telegram_username(chat_id, telegram_username)
         
-        # 🔧 НОВОЕ: Обработка действий с ссылками
+        # Обработка действий с ссылками
         if callback_data.startswith("link_add:"):
             url = callback_data.replace("link_add:", "")
             self.process_link_add(chat_id, telegram_username, callback_id, url)
@@ -504,7 +491,7 @@ class TelegramUnifiedHandler:
             url = callback_data.replace("link_view:", "")
             self.process_link_view(chat_id, callback_id, url)
         
-        # 🔧 НОВОЕ: Просмотр профиля
+        # Просмотр профиля
         elif callback_data.startswith("profile:"):
             user_id = callback_data.split(":", 1)[1]
             self.show_profile(chat_id, callback_id, user_id)
@@ -548,7 +535,7 @@ class TelegramUnifiedHandler:
         text = text.strip()
         logger.info(f"📩 Команда от {telegram_username or first_name} ({chat_id}): {text[:50]}")
         
-        # === /start ===
+        # /start
         if text.startswith('/start'):
             self.send_message(
                 chat_id,
@@ -568,7 +555,7 @@ class TelegramUnifiedHandler:
                 "/help - Помощь"
             )
         
-        # === /add ===
+        # /add
         elif text.startswith('/add'):
             parts = text.split(maxsplit=1)
             
@@ -585,7 +572,7 @@ class TelegramUnifiedHandler:
             
             url = parts[1].strip()
             
-            # 🔧 ВАЛИДАЦИЯ
+            # Валидация
             if self.validator:
                 user_id = self.users_db.extract_id_from_url(url)
                 
@@ -631,15 +618,15 @@ class TelegramUnifiedHandler:
             self.send_message(chat_id, message)
             logger.info(f"{'✅' if success else '❌'} Регистрация: {telegram_username} -> {url[:50]}")
         
-        # === /notifications (бывший /list) ===
+        # /notifications
         elif text.startswith('/notifications') or text.startswith('/list'):
             self.show_notifications_list(chat_id)
         
-        # === /profile ===
+        # /profile
         elif text.startswith('/profile'):
             self.show_profile_list(chat_id)
         
-        # === /remove ===
+        # /remove
         elif text.startswith('/remove'):
             parts = text.split()
             
@@ -669,7 +656,7 @@ class TelegramUnifiedHandler:
                 
                 self.send_message(chat_id, "\n".join(lines))
         
-        # === /help ===
+        # /help
         elif text.startswith('/help'):
             self.send_message(
                 chat_id,
@@ -693,23 +680,20 @@ class TelegramUnifiedHandler:
                 "/remove - Удалить аккаунт"
             )
         
-        # === ССЫЛКА БЕЗ КОМАНДЫ ===
+        # Ссылка без команды
         elif not text.startswith('/'):
-            # 🔧 НОВОЕ: Проверяем это ли ссылка
             user_id = self.users_db.extract_id_from_url(text)
             
             if user_id:
-                # Это ссылка - спрашиваем что делать
                 self.ask_link_action(chat_id, text)
             else:
-                # Не ссылка
                 self.send_message(
                     chat_id,
                     "❌ Неверный формат ссылки\n\n"
                     "Используйте /help для списка команд"
                 )
         
-        # === НЕИЗВЕСТНАЯ КОМАНДА ===
+        # Неизвестная команда
         else:
             self.send_message(
                 chat_id,
@@ -754,7 +738,6 @@ class TelegramUnifiedHandler:
                 "allowed_updates": ["message", "callback_query"]
             }
             
-            # 🔧 БЕЗ прокси
             response = requests.get(
                 url,
                 params=params,

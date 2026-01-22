@@ -1,0 +1,11 @@
+{
+  "_comment": "Формат: user_id или полная ссылка",
+  "_examples": [
+    "76012",
+    "https://mangabuff.ru/users/76012",
+    "/users/76012"
+  ],
+  "blacklist": [
+    "76012"
+  ]
+}

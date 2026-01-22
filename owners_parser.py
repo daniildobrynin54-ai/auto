@@ -1,4 +1,4 @@
-"""Парсер владельцев карт с механизмом повторных попыток."""
+"""Парсер владельцев карт с механизмом повторных попыток и черным списком."""
 
 import random
 import re
@@ -16,6 +16,7 @@ from config import (
     FIRST_PAGE_SKIP_OWNERS
 )
 from trade import TradeManager
+from blacklist import get_blacklist_manager  # 🔧 НОВОЕ
 from logger import get_logger
 
 
@@ -38,6 +39,7 @@ class OwnersParser:
     
     def __init__(self, session: requests.Session):
         self.session = session
+        self.blacklist_manager = get_blacklist_manager()  # 🔧 НОВОЕ
     
     def _extract_user_id(self, owner_element) -> Optional[str]:
         href = owner_element.get('href', '')
@@ -95,10 +97,20 @@ class OwnersParser:
                 if not user_id:
                     continue
                 
+                # 🔧 НОВОЕ: Проверка черного списка
+                if self.blacklist_manager.is_blacklisted(user_id):
+                    logger.debug(f"🚫 Пользователь {user_id} в черном списке, пропускаем")
+                    continue
+                
                 user_name = self._extract_user_name(owner_elem)
                 available_owners.append(Owner(user_id, user_name))
             
             has_next = self._has_next_page(soup)
+            
+            # 🔧 НОВОЕ: Логируем фильтрацию
+            if len(available_owners) < len(owner_elements) - start_index:
+                filtered = len(owner_elements) - start_index - len(available_owners)
+                logger.info(f"   Страница {page}: отфильтровано {filtered} пользователей (черный список + недоступные)")
             
             return available_owners, has_next
             
@@ -138,6 +150,7 @@ class OwnersProcessor:
         self.last_trade_time = 0.0
         self.trade_manager = TradeManager(session, debug) if not dry_run else None
         self.failed_attempts_set: Set[int] = set()
+        self.blacklist_manager = get_blacklist_manager()  # 🔧 НОВОЕ
     
     def reset_state(self) -> None:
         """Сбрасывает состояние процессора при смене карты."""
@@ -178,6 +191,11 @@ class OwnersProcessor:
         Returns:
             (успех обмена, нужно прервать обработку)
         """
+        # 🔧 НОВОЕ: Дополнительная проверка черного списка
+        if self.blacklist_manager.is_blacklisted(owner.id):
+            logger.info(f"   [{index}/{total}] {owner.name} → 🚫 В черном списке")
+            return False, False
+        
         if monitor_obj and monitor_obj.card_changed:
             print(f"\n⚠️  Карта изменилась! Прерываем обработку владельца {owner.name}")
             return False, True
@@ -269,10 +287,16 @@ class OwnersProcessor:
         page = 1
         
         print(f"🔍 Поиск доступных владельцев карты {card_id}...")
-        print(f"📊 Режим: {'DRY-RUN (тестовый)' if self.dry_run else 'БОЕВОЙ (реальные обмены)'}\n")
+        print(f"📊 Режим: {'DRY-RUN (тестовый)' if self.dry_run else 'БОЕВОЙ (реальные обмены)'}")
+        
+        # 🔧 НОВОЕ: Показываем статус черного списка
+        blacklist_info = self.blacklist_manager.get_blacklist_info()
+        if blacklist_info['count'] > 0:
+            print(f"🚫 Черный список активен: {blacklist_info['count']} пользователей")
+        print()
         
         while True:
-            # 🔧 НОВОЕ: Проверяем флаг замены карты ПЕРЕД каждой страницей
+            # Проверяем флаг замены карты ПЕРЕД каждой страницей
             if monitor_obj and monitor_obj.card_changed:
                 print("\n🔄 Обнаружена новая карта! Прерываем обработку страницы...")
                 return total_processed
@@ -283,7 +307,7 @@ class OwnersProcessor:
                 print(f"📊 Страница {page}: найдено владельцев - {len(owners)}")
                 
                 for idx, owner in enumerate(owners, 1):
-                    # 🔧 Проверяем флаг ПЕРЕД каждым владельцем
+                    # Проверяем флаг ПЕРЕД каждым владельцем
                     if monitor_obj and monitor_obj.card_changed:
                         print("\n🔄 Обнаружена новая карта! Прерываем обработку владельца...")
                         return total_processed
@@ -316,7 +340,7 @@ class OwnersProcessor:
                 print(f"   Отправлено обменов: {total_trades_sent}")
                 break
             
-            # 🔧 Проверяем флаг ПЕРЕД переходом на следующую страницу
+            # Проверяем флаг ПЕРЕД переходом на следующую страницу
             if monitor_obj and monitor_obj.card_changed:
                 print("\n🔄 Обнаружена новая карта! Прерываем перед следующей страницей...")
                 return total_processed
