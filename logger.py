@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Optional
 from pathlib import Path
 import threading
-import time
 
 
 # Цветовые коды для консоли (ANSI)
@@ -92,7 +91,7 @@ class PlainFormatter(logging.Formatter):
 
 class DailyRotatingFileHandler(logging.Handler):
     """
-    🔧 НОВОЕ: Handler с автоматической ротацией по дням.
+    🔧 ИСПРАВЛЕНО: Handler с автоматической ротацией БЕЗ deadlock.
     
     Создает новый файл при смене суток даже если приложение не перезапускалось.
     """
@@ -103,7 +102,8 @@ class DailyRotatingFileHandler(logging.Handler):
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.current_date = None
         self.current_handler = None
-        self.lock = threading.Lock()
+        # 🔧 ИСПРАВЛЕНО: Используем RLock вместо Lock для избежания deadlock
+        self.lock = threading.RLock()
         
         # Форматтер для файлов
         file_format = '[%(asctime)s] %(levelname)-8s | %(name)s > %(message)s'
@@ -119,56 +119,79 @@ class DailyRotatingFileHandler(logging.Handler):
         return datetime.now().strftime('%Y-%m-%d')
     
     def _rotate_if_needed(self) -> None:
-        """Проверяет и выполняет ротацию если нужно."""
+        """
+        🔧 ИСПРАВЛЕНО: Проверяет и выполняет ротацию без блокировки в emit().
+        """
         current_date = self._get_current_date()
         
-        if current_date != self.current_date:
-            with self.lock:
-                # Двойная проверка после получения блокировки
-                if current_date != self.current_date:
-                    # Закрываем старый handler
-                    if self.current_handler:
-                        self.current_handler.close()
-                    
-                    # Создаем новый файл
-                    log_file = self.base_dir / f"{current_date}.log"
-                    self.current_handler = logging.FileHandler(
-                        log_file,
-                        mode='a',
-                        encoding='utf-8'
-                    )
-                    self.current_handler.setFormatter(self.formatter)
-                    
-                    self.current_date = current_date
-                    
-                    # Логируем ротацию
-                    if self.current_handler:
-                        rotation_msg = f"=== Log rotation: new file created at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==="
-                        record = logging.LogRecord(
-                            name='logger',
-                            level=logging.INFO,
-                            pathname='',
-                            lineno=0,
-                            msg=rotation_msg,
-                            args=(),
-                            exc_info=None
-                        )
-                        self.current_handler.emit(record)
+        # 🔧 КРИТИЧНО: Проверка БЕЗ блокировки для быстрого выхода
+        if current_date == self.current_date:
+            return
+        
+        # Только если точно нужна ротация - берем блокировку
+        with self.lock:
+            # Двойная проверка после получения блокировки
+            if current_date == self.current_date:
+                return
+            
+            # Закрываем старый handler
+            if self.current_handler:
+                try:
+                    self.current_handler.close()
+                except Exception:
+                    pass
+            
+            # Создаем новый файл
+            log_file = self.base_dir / f"{current_date}.log"
+            self.current_handler = logging.FileHandler(
+                log_file,
+                mode='a',
+                encoding='utf-8'
+            )
+            self.current_handler.setFormatter(self.formatter)
+            
+            self.current_date = current_date
+            
+            # Логируем ротацию
+            if self.current_handler:
+                rotation_msg = f"=== Log rotation: new file created at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==="
+                record = logging.LogRecord(
+                    name='logger',
+                    level=logging.INFO,
+                    pathname='',
+                    lineno=0,
+                    msg=rotation_msg,
+                    args=(),
+                    exc_info=None
+                )
+                try:
+                    self.current_handler.emit(record)
+                except Exception:
+                    pass
     
     def emit(self, record: logging.LogRecord) -> None:
-        """Записывает лог-запись, выполняя ротацию при необходимости."""
+        """
+        🔧 ИСПРАВЛЕНО: Записывает лог БЕЗ блокировки при проверке ротации.
+        """
         try:
+            # 🔧 КРИТИЧНО: Проверка ротации БЕЗ блокировки
             self._rotate_if_needed()
             
+            # Запись в handler (может быть одновременно из разных потоков)
             if self.current_handler:
+                # FileHandler сам thread-safe, не нужна дополнительная блокировка
                 self.current_handler.emit(record)
         except Exception:
             self.handleError(record)
     
     def close(self) -> None:
         """Закрывает handler."""
-        if self.current_handler:
-            self.current_handler.close()
+        with self.lock:
+            if self.current_handler:
+                try:
+                    self.current_handler.close()
+                except Exception:
+                    pass
         super().close()
 
 
@@ -219,7 +242,7 @@ class AppLogger:
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
         
-        # === 🔧 НОВОЕ: ФАЙЛОВЫЙ ОБРАБОТЧИК С АВТОМАТИЧЕСКОЙ РОТАЦИЕЙ ===
+        # === 🔧 ИСПРАВЛЕНО: ФАЙЛОВЫЙ ОБРАБОТЧИК С РОТАЦИЕЙ БЕЗ DEADLOCK ===
         rotating_handler = DailyRotatingFileHandler(
             base_dir=str(self.base_dir),
             level=self.level
@@ -410,4 +433,3 @@ def success(message: str):
 def failure(message: str):
     """Выводит сообщение об ошибке."""
     get_logger().failure(message)
-
