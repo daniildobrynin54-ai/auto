@@ -410,3 +410,4 @@ def success(message: str):
 def failure(message: str):
     """Выводит сообщение об ошибке."""
     get_logger().failure(message)
+
